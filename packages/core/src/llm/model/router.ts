@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { createAnthropic } from '@ai-sdk/anthropic-v5';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible-v5';
 import { createOpenAI } from '@ai-sdk/openai-v6';
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart } from '@ai-sdk/provider-v5';
@@ -137,6 +138,8 @@ export class ModelRouterLanguageModel implements MastraLanguageModelV2 {
       url?: string;
       apiKey?: string;
       headers?: Record<string, string>;
+      providerKind?: 'openai-compatible' | 'anthropic-compatible';
+      anthropicVersion?: string;
     };
 
     if (typeof config === 'string') {
@@ -148,6 +151,8 @@ export class ModelRouterLanguageModel implements MastraLanguageModelV2 {
         url: config.url,
         apiKey: config.apiKey,
         headers: config.headers,
+        providerKind: config.providerKind,
+        anthropicVersion: config.anthropicVersion,
       };
     } else {
       // config has 'id' field
@@ -156,6 +161,8 @@ export class ModelRouterLanguageModel implements MastraLanguageModelV2 {
         url: config.url,
         apiKey: config.apiKey,
         headers: config.headers,
+        providerKind: config.providerKind,
+        anthropicVersion: config.anthropicVersion,
       };
     }
 
@@ -165,6 +172,8 @@ export class ModelRouterLanguageModel implements MastraLanguageModelV2 {
       url?: string;
       apiKey?: string;
       headers?: Record<string, string>;
+      providerKind?: 'openai-compatible' | 'anthropic-compatible';
+      anthropicVersion?: string;
     } = {
       ...normalizedConfig,
       routerId: normalizedConfig.id,
@@ -478,6 +487,8 @@ export class ModelRouterLanguageModel implements MastraLanguageModelV2 {
           modelId,
           providerId,
           this.config.url || '',
+          this.config.providerKind || '',
+          this.config.anthropicVersion || '',
           stableHeaderKey(headers),
           resolvedTransport,
           websocketKey,
@@ -489,8 +500,24 @@ export class ModelRouterLanguageModel implements MastraLanguageModelV2 {
       return cache.modelInstances.get(key)!;
     }
 
-    // If custom URL is provided, use it directly with openai-compatible
+    // If custom URL is provided, use it directly with the requested compatible protocol.
     if (this.config.url) {
+      if (this.config.providerKind === 'anthropic-compatible') {
+        const anthropicHeaders = {
+          ...(this.config.headers ?? {}),
+          ...(this.config.anthropicVersion ? { 'anthropic-version': this.config.anthropicVersion } : {}),
+        };
+        const modelInstance = createAnthropic({
+          name: `${providerId}.messages`,
+          apiKey,
+          baseURL: this.config.url,
+          headers: Object.keys(anthropicHeaders).length > 0 ? anthropicHeaders : undefined,
+        })(modelId);
+        cache.modelInstances.set(key, modelInstance);
+        this.setStreamTransportHandle({ resolvedTransport, responsesWebSocket });
+        return modelInstance;
+      }
+
       const modelInstance = createOpenAICompatible({
         name: providerId,
         apiKey,

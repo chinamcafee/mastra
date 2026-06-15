@@ -38,6 +38,8 @@ export type OpenAICompatibleConfig =
       url?: string; // Optional custom URL endpoint
       apiKey?: string; // Optional API key (falls back to env vars)
       headers?: Record<string, string>; // Additional headers
+      providerKind?: 'openai-compatible' | 'anthropic-compatible'; // Optional protocol for custom endpoints
+      anthropicVersion?: string; // Optional Anthropic Messages API version for Anthropic-compatible endpoints
     }
   | {
       providerId: string; // Provider ID like "openai" or "custom-provider"
@@ -45,6 +47,8 @@ export type OpenAICompatibleConfig =
       url?: string; // Optional custom URL endpoint
       apiKey?: string; // Optional API key (falls back to env vars)
       headers?: Record<string, string>; // Additional headers
+      providerKind?: 'openai-compatible' | 'anthropic-compatible'; // Optional protocol for custom endpoints
+      anthropicVersion?: string; // Optional Anthropic Messages API version for Anthropic-compatible endpoints
     };
 
 type DoStreamResultPromiseV2 = PromiseLike<Awaited<ReturnType<LanguageModelV2['doStream']>>>;

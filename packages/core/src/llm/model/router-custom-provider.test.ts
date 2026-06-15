@@ -9,8 +9,15 @@ vi.mock('@ai-sdk/openai-compatible-v5', async () => {
   };
 });
 
+vi.mock('@ai-sdk/anthropic-v5', async () => {
+  return {
+    createAnthropic: vi.fn(),
+  };
+});
+
 // Now import the mocked module
 const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible-v5');
+const { createAnthropic } = await import('@ai-sdk/anthropic-v5');
 
 describe('ModelRouter - Custom Provider Support', () => {
   beforeEach(() => {
@@ -23,6 +30,13 @@ describe('ModelRouter - Custom Provider Support', () => {
         });
       }),
     } as any);
+    vi.mocked(createAnthropic).mockReturnValue(
+      vi.fn((_modelId: string) =>
+        createMockModel({
+          mockText: 'Hello from anthropic mock!',
+        }),
+      ) as any,
+    );
   });
 
   afterEach(() => {
@@ -57,6 +71,37 @@ describe('ModelRouter - Custom Provider Support', () => {
       // Verify chatModel was called with the modelId
       const mockInstance = vi.mocked(createOpenAICompatible).mock.results[0].value;
       expect(mockInstance.chatModel).toHaveBeenCalledWith('my-model');
+    });
+
+    it('should route Anthropic-compatible custom URLs through the native Anthropic adapter', async () => {
+      const agent = new Agent({
+        id: 'test-agent',
+        name: 'test-agent',
+        instructions: 'You are a helpful assistant.',
+        model: {
+          providerId: 'my-anthropic-provider',
+          providerKind: 'anthropic-compatible',
+          modelId: 'claude-3-5-sonnet-latest',
+          url: 'http://fake-anthropic-server-that-does-not-exist.local:9999/v1',
+          apiKey: 'anthropic-test-key',
+          anthropicVersion: '2023-06-01',
+        },
+      });
+
+      await agent.generate('test', { maxSteps: 1 });
+
+      expect(createAnthropic).toHaveBeenCalledWith({
+        name: 'my-anthropic-provider.messages',
+        apiKey: 'anthropic-test-key',
+        baseURL: 'http://fake-anthropic-server-that-does-not-exist.local:9999/v1',
+        headers: {
+          'anthropic-version': '2023-06-01',
+        },
+      });
+      expect(createOpenAICompatible).not.toHaveBeenCalled();
+
+      const mockInstance = vi.mocked(createAnthropic).mock.results[0].value as ReturnType<typeof vi.fn>;
+      expect(mockInstance).toHaveBeenCalledWith('claude-3-5-sonnet-latest');
     });
   });
 
