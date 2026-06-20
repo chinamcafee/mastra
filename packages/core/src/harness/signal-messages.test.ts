@@ -53,6 +53,73 @@ function createHarness(
 }
 
 describe('Harness signal messages', () => {
+  it('converts sendMessage files into fenced text and preserved binary file parts', () => {
+    const harness = createHarness(new InMemoryStore());
+    const createMessageInput = (
+      harness as unknown as {
+        createMessageInput(input: {
+          content: string;
+          files?: Array<{ data: string; mediaType: string; filename?: string }>;
+        }): unknown;
+      }
+    ).createMessageInput.bind(harness);
+
+    const input = createMessageInput({
+      content: 'Review these attachments.',
+      files: [
+        {
+          data: 'data:text/plain;base64,Y29uc29sZS5sb2coImhpIik7',
+          mediaType: 'text/plain',
+          filename: 'snippet.ts',
+        },
+        {
+          data: 'data:application/octet-stream;base64,AAEC',
+          mediaType: 'application/octet-stream',
+          filename: 'archive.bin',
+        },
+      ],
+    });
+
+    expect(input).toEqual([
+      { type: 'text', text: 'Review these attachments.' },
+      { type: 'text', text: '[File: snippet.ts]\n```\nconsole.log("hi");\n```' },
+      {
+        type: 'file',
+        data: 'data:application/octet-stream;base64,AAEC',
+        mediaType: 'application/octet-stream',
+        filename: 'archive.bin',
+      },
+    ]);
+  });
+
+  it('uses a longer fence than any backtick run in text attachments', () => {
+    const harness = createHarness(new InMemoryStore());
+    const createMessageInput = (
+      harness as unknown as {
+        createMessageInput(input: {
+          content: string;
+          files?: Array<{ data: string; mediaType: string; filename?: string }>;
+        }): unknown;
+      }
+    ).createMessageInput.bind(harness);
+
+    const input = createMessageInput({
+      content: 'Review this markdown.',
+      files: [
+        {
+          data: 'const fence = ```nested```;',
+          mediaType: 'text/markdown',
+          filename: 'notes.md',
+        },
+      ],
+    });
+
+    expect(input).toEqual([
+      { type: 'text', text: 'Review this markdown.' },
+      { type: 'text', text: '[File: notes.md]\n````\nconst fence = ```nested```;\n````' },
+    ]);
+  });
+
   it('renders persisted user-message signal attributes', async () => {
     const storage = new InMemoryStore();
     const harness = createHarness(storage);
@@ -70,7 +137,7 @@ describe('Harness signal messages', () => {
       ],
     });
 
-    await expect(harness.listMessages()).resolves.toEqual([
+    await expect(harness.session.thread.listActiveMessages()).resolves.toEqual([
       {
         id: 'signal-user-1',
         role: 'user',
@@ -98,7 +165,7 @@ describe('Harness signal messages', () => {
       ],
     });
 
-    await expect(harness.listMessages()).resolves.toEqual([
+    await expect(harness.session.thread.listActiveMessages()).resolves.toEqual([
       {
         id: 'signal-1',
         role: 'user',
@@ -112,6 +179,206 @@ describe('Harness signal messages', () => {
             gapText: undefined,
             gapMs: undefined,
             timestamp: undefined,
+          },
+        ],
+        createdAt: new Date('2026-05-04T00:00:00.000Z'),
+      },
+    ]);
+  });
+
+  it('normalizes system-reminder contents from text-part arrays', async () => {
+    const storage = new InMemoryStore();
+    const harness = createHarness(storage);
+    const thread = await harness.createThread();
+
+    await storage.stores.memory!.saveMessages({
+      messages: [
+        createSignal({
+          id: 'signal-array',
+          type: 'system-reminder',
+          contents: [
+            { type: 'text', text: 'First line' },
+            { type: 'text', text: 'Second line' },
+          ],
+          attributes: { type: 'dynamic-agents-md', path: '/tmp/AGENTS.md' },
+          createdAt: new Date('2026-05-04T00:00:00.000Z'),
+        }).toDBMessage({ threadId: thread.id, resourceId: thread.resourceId }),
+      ],
+    });
+
+    await expect(harness.session.thread.listActiveMessages()).resolves.toEqual([
+      {
+        id: 'signal-array',
+        role: 'user',
+        content: [
+          {
+            type: 'system_reminder',
+            message: 'First line\nSecond line',
+            reminderType: 'dynamic-agents-md',
+            path: '/tmp/AGENTS.md',
+            precedesMessageId: undefined,
+            gapText: undefined,
+            gapMs: undefined,
+            timestamp: undefined,
+          },
+        ],
+        createdAt: new Date('2026-05-04T00:00:00.000Z'),
+      },
+    ]);
+  });
+
+  it('renders persisted generic reactive signals', async () => {
+    const storage = new InMemoryStore();
+    const harness = createHarness(storage);
+    const thread = await harness.createThread();
+
+    await storage.stores.memory!.saveMessages({
+      messages: [
+        createSignal({
+          id: 'reactive-signal-1',
+          type: 'reactive',
+          tagName: 'build-status',
+          contents: 'Build is still running',
+          attributes: { source: 'ci' },
+          metadata: { buildId: 'build-1' },
+          createdAt: new Date('2026-05-04T00:00:00.000Z'),
+        }).toDBMessage({ threadId: thread.id, resourceId: thread.resourceId }),
+      ],
+    });
+
+    await expect(harness.session.thread.listActiveMessages()).resolves.toEqual([
+      {
+        id: 'reactive-signal-1',
+        role: 'user',
+        content: [
+          {
+            type: 'reactive_signal',
+            id: 'reactive-signal-1',
+            tagName: 'build-status',
+            message: 'Build is still running',
+            attributes: { source: 'ci' },
+            metadata: { buildId: 'build-1' },
+          },
+        ],
+        createdAt: new Date('2026-05-04T00:00:00.000Z'),
+      },
+    ]);
+  });
+
+  it('renders persisted notification summary signals', async () => {
+    const storage = new InMemoryStore();
+    const harness = createHarness(storage);
+    const thread = await harness.createThread();
+
+    await storage.stores.memory!.saveMessages({
+      messages: [
+        createSignal({
+          id: 'summary-1',
+          type: 'notification',
+          tagName: 'notification-summary',
+          contents: 'mastracode: 1',
+          attributes: { pending: 1 },
+          metadata: {
+            notificationSummary: {
+              threadId: thread.id,
+              resourceId: thread.resourceId,
+              pending: 1,
+              bySource: { mastracode: 1 },
+              byPriority: { low: 1 },
+              notificationIds: ['notification-1'],
+            },
+            notificationIds: ['notification-1'],
+          },
+          createdAt: new Date('2026-05-04T00:00:00.000Z'),
+        }).toDBMessage({ threadId: thread.id, resourceId: thread.resourceId }),
+      ],
+    });
+
+    await expect(harness.session.thread.listActiveMessages()).resolves.toEqual([
+      {
+        id: 'summary-1',
+        role: 'user',
+        content: [
+          {
+            type: 'notification_summary',
+            id: 'summary-1',
+            message: 'mastracode: 1',
+            pending: 1,
+            bySource: { mastracode: 1 },
+            byPriority: { low: 1 },
+            notificationIds: ['notification-1'],
+          },
+        ],
+        createdAt: new Date('2026-05-04T00:00:00.000Z'),
+      },
+    ]);
+  });
+
+  it('renders persisted full notification signals', async () => {
+    const storage = new InMemoryStore();
+    const harness = createHarness(storage);
+    const thread = await harness.createThread();
+
+    await storage.stores.memory!.saveMessages({
+      messages: [
+        createSignal({
+          id: 'notification-signal-1',
+          type: 'notification',
+          tagName: 'notification',
+          contents: 'CI failed on main',
+          attributes: {
+            id: 'notification-1',
+            source: 'github',
+            kind: 'ci-status',
+            priority: 'high',
+            status: 'delivered',
+          },
+          metadata: {
+            notification: {
+              signal: 'notification',
+              recordId: 'notification-1',
+              source: 'github',
+              kind: 'ci-status',
+              priority: 'high',
+              status: 'delivered',
+            },
+          },
+          createdAt: new Date('2026-05-04T00:00:00.000Z'),
+        }).toDBMessage({ threadId: thread.id, resourceId: thread.resourceId }),
+      ],
+    });
+
+    await expect(harness.session.thread.listActiveMessages()).resolves.toEqual([
+      {
+        id: 'notification-signal-1',
+        role: 'user',
+        content: [
+          {
+            type: 'notification',
+            id: 'notification-signal-1',
+            notificationId: 'notification-1',
+            message: 'CI failed on main',
+            source: 'github',
+            kind: 'ci-status',
+            priority: 'high',
+            status: 'delivered',
+            attributes: {
+              id: 'notification-1',
+              source: 'github',
+              kind: 'ci-status',
+              priority: 'high',
+              status: 'delivered',
+            },
+            metadata: {
+              notification: {
+                signal: 'notification',
+                recordId: 'notification-1',
+                source: 'github',
+                kind: 'ci-status',
+                priority: 'high',
+                status: 'delivered',
+              },
+            },
           },
         ],
         createdAt: new Date('2026-05-04T00:00:00.000Z'),
@@ -142,7 +409,7 @@ describe('Harness signal messages', () => {
     expect(assistantStarts).toHaveLength(1);
     expect(assistantEnds).toHaveLength(1);
     expect(assistantEnds[0]?.message.content).toEqual([{ type: 'text', text: 'Hello' }]);
-    expect(harness.getCurrentRunId()).toBeNull();
+    expect(harness.session.getCurrentRunId()).toBeNull();
   });
 
   it('sends active text signals without building idle stream options', async () => {
@@ -163,12 +430,11 @@ describe('Harness signal messages', () => {
     const thread = await harness.createThread();
 
     // Simulate an active run from the harness consumer's perspective
-    (harness as any).currentRunId = 'active-run-id';
+    harness.session.run.setRunId({ runId: 'active-run-id' });
 
     const buildToolsets = vi.spyOn(harness as any, 'buildToolsets');
     const sendSignal = vi.spyOn(agent, 'sendSignal').mockReturnValue({
-      accepted: true,
-      runId: 'active-run-id',
+      accepted: Promise.resolve({ action: 'deliver', runId: 'active-run-id' }),
       signal: createSignal({ type: 'user-message', contents: 'active hello' }),
     });
 
@@ -193,12 +459,12 @@ describe('Harness signal messages', () => {
       events.push(event);
     });
 
-    (harness as any).abortController = new AbortController();
+    harness.session.run.ensureAbortController();
 
     await harness.followUp({ content: 'queued follow-up' });
 
-    expect(harness.getFollowUpCount()).toBe(1);
-    expect(harness.getDisplayState().queuedFollowUps).toBe(1);
+    expect(harness.session.followUps.count()).toBe(1);
+    expect(harness.session.displayState.get().queuedFollowUps).toBe(1);
     expect(events).toContainEqual({ type: 'follow_up_queued', count: 1 });
   });
 
@@ -222,13 +488,12 @@ describe('Harness signal messages', () => {
       activeRunId: () => 'run-1',
     });
     const queueMessage = vi.spyOn(agent, 'queueMessage').mockReturnValue({
-      accepted: true,
-      runId: 'queued-run-id',
+      accepted: Promise.resolve({ action: 'deliver', runId: 'queued-run-id' }),
       signal: createSignal({ type: 'user', contents: 'queued follow-up' }),
     });
     const sendSignal = vi.spyOn(agent, 'sendSignal');
     const thread = await harness.createThread();
-    (harness as any).abortController = new AbortController();
+    harness.session.run.ensureAbortController();
 
     await harness.followUp({ content: 'queued follow-up' });
     await (harness as any).drainFollowUpQueue();
@@ -249,8 +514,8 @@ describe('Harness signal messages', () => {
       }),
     );
     expect(sendSignal).not.toHaveBeenCalled();
-    expect(harness.getFollowUpCount()).toBe(0);
-    expect(harness.getDisplayState().queuedFollowUps).toBe(0);
+    expect(harness.session.followUps.count()).toBe(0);
+    expect(harness.session.displayState.get().queuedFollowUps).toBe(0);
     expect(events).toContainEqual({ type: 'follow_up_queued', count: 1 });
     expect(events).toContainEqual({ type: 'follow_up_queued', count: 0, runId: 'queued-run-id' });
   });
@@ -267,8 +532,8 @@ describe('Harness signal messages', () => {
     await harness.followUp({ content: 'idle follow-up' });
 
     expect(sendMessage).toHaveBeenCalledWith({ content: 'idle follow-up', requestContext: undefined });
-    expect(harness.getFollowUpCount()).toBe(0);
-    expect(harness.getDisplayState().queuedFollowUps).toBe(0);
+    expect(harness.session.followUps.count()).toBe(0);
+    expect(harness.session.displayState.get().queuedFollowUps).toBe(0);
     expect(events.some(event => event.type === 'follow_up_queued')).toBe(false);
   });
 
@@ -290,8 +555,7 @@ describe('Harness signal messages', () => {
     });
     await harness.createThread();
     vi.spyOn(agent, 'sendSignal').mockReturnValue({
-      accepted: true,
-      runId: 'active-run-id',
+      accepted: Promise.resolve({ action: 'deliver', runId: 'active-run-id' }),
       signal: createSignal({ type: 'user-message', contents: 'active hello' }),
     });
 
@@ -329,20 +593,19 @@ describe('Harness signal messages', () => {
       });
     await harness.createThread();
     vi.spyOn(agent, 'sendSignal').mockReturnValue({
-      accepted: true,
-      runId: 'active-run-id',
+      accepted: Promise.resolve({ action: 'deliver', runId: 'active-run-id' }),
       signal: createSignal({ type: 'user-message', contents: 'active hello' }),
     });
 
     const signal = harness.sendSignal({ content: 'active hello' });
     await signal.accepted;
-    expect(harness.getCurrentRunId()).toBe('active-run-id');
+    expect(harness.session.getCurrentRunId()).toBe('active-run-id');
 
     await harness.createThread();
 
     expect(abort).toHaveBeenCalled();
     expect(unsubscribe).toHaveBeenCalled();
-    expect(harness.getCurrentRunId()).toBeNull();
+    expect(harness.session.getCurrentRunId()).toBeNull();
   });
 
   it('emits an error and clears run state when a subscription iterator throws', async () => {
@@ -373,8 +636,8 @@ describe('Harness signal messages', () => {
     await waitFor(() => events.some(event => event.type === 'agent_end' && event.reason === 'error'));
 
     expect(events.some(event => event.type === 'error' && event.error.message === 'subscription failed')).toBe(true);
-    await waitFor(() => harness.getCurrentRunId() === null);
-    expect(harness.getCurrentRunId()).toBeNull();
+    await waitFor(() => harness.session.getCurrentRunId() === null);
+    expect(harness.session.getCurrentRunId()).toBeNull();
   });
 
   it('ignores trailing chunks from an aborted subscription run', async () => {
@@ -415,8 +678,7 @@ describe('Harness signal messages', () => {
     });
     await harness.createThread();
     vi.spyOn(agent, 'sendSignal').mockReturnValue({
-      accepted: true,
-      runId: 'run-1',
+      accepted: Promise.resolve({ action: 'deliver', runId: 'run-1' }),
       signal: createSignal({ type: 'user-message', contents: 'active hello' }),
     });
 
@@ -501,8 +763,7 @@ describe('Harness signal messages', () => {
       .spyOn(agent, 'approveToolCall')
       .mockResolvedValue({ fullStream: directResumeStream } as any);
     vi.spyOn(agent, 'sendSignal').mockReturnValue({
-      accepted: true,
-      runId: 'run-1',
+      accepted: Promise.resolve({ action: 'deliver', runId: 'run-1' }),
       signal: createSignal({ type: 'user-message', contents: 'run tool' }),
     });
 
@@ -624,20 +885,20 @@ describe('Harness signal messages', () => {
 
     const firstIdle = harness.sendSignal({ content: 'start first idle stream' });
     await firstIdle.accepted;
-    await waitFor(() => harness.getCurrentRunId() !== null && releaseInitialCalls.length === 1);
+    await waitFor(() => harness.session.getCurrentRunId() !== null && releaseInitialCalls.length === 1);
     const firstInterjection = harness.sendSignal({ content: 'first active interjection' });
     await firstInterjection.accepted;
     releaseInitialCalls.shift()?.();
-    await waitFor(() => harness.getCurrentRunId() === null);
+    await waitFor(() => harness.session.getCurrentRunId() === null);
     expect(JSON.stringify(prompts[1])).toContain('first active interjection');
 
     const secondIdle = harness.sendSignal({ content: 'start second idle stream' });
     await secondIdle.accepted;
-    await waitFor(() => harness.getCurrentRunId() !== null && releaseInitialCalls.length === 1);
+    await waitFor(() => harness.session.getCurrentRunId() !== null && releaseInitialCalls.length === 1);
     const secondInterjection = harness.sendSignal({ content: 'second active interjection' });
     await secondInterjection.accepted;
     releaseInitialCalls.shift()?.();
-    await waitFor(() => harness.getCurrentRunId() === null);
+    await waitFor(() => harness.session.getCurrentRunId() === null);
     expect(JSON.stringify(prompts[3])).toContain('second active interjection');
   });
 
@@ -725,5 +986,288 @@ describe('Harness signal messages', () => {
         },
       },
     ]);
+  });
+
+  it('closes the current assistant message when a goal chunk arrives before continuation text', async () => {
+    const storage = new InMemoryStore();
+    const harness = createHarness(storage);
+    const events: HarnessEvent[] = [];
+    harness.subscribe(event => {
+      events.push(event);
+    });
+    const state = (harness as any).createStreamState();
+    const requestContext = new RequestContext();
+
+    await (harness as any).processStreamChunk(state, { type: 'text-start', payload: { id: 'text-1' } }, requestContext);
+    await (harness as any).processStreamChunk(
+      state,
+      { type: 'text-delta', payload: { id: 'text-1', text: 'Fact 1' } },
+      requestContext,
+    );
+    await (harness as any).processStreamChunk(
+      state,
+      {
+        type: 'goal',
+        payload: {
+          objective: 'three whale facts',
+          iteration: 1,
+          maxRuns: 500,
+          passed: false,
+          status: 'active',
+          results: [],
+          reason: 'continue',
+          duration: 0,
+          timedOut: false,
+          maxRunsReached: false,
+          suppressFeedback: false,
+        },
+      },
+      requestContext,
+    );
+    await (harness as any).processStreamChunk(state, { type: 'text-start', payload: { id: 'text-2' } }, requestContext);
+    await (harness as any).processStreamChunk(
+      state,
+      { type: 'text-delta', payload: { id: 'text-2', text: 'Fact 2' } },
+      requestContext,
+    );
+
+    const messageEndEvents = events.filter(
+      (event): event is Extract<HarnessEvent, { type: 'message_end' }> => event.type === 'message_end',
+    );
+    const messageUpdateEvents = events.filter(
+      (event): event is Extract<HarnessEvent, { type: 'message_update' }> => event.type === 'message_update',
+    );
+
+    expect(messageEndEvents).toHaveLength(1);
+    expect(messageEndEvents[0].message.content).toEqual([{ type: 'text', text: 'Fact 1' }]);
+    expect(messageUpdateEvents.at(-1)?.message.content).toEqual([{ type: 'text', text: 'Fact 2' }]);
+    expect(messageUpdateEvents.at(-1)?.message.id).not.toBe(messageEndEvents[0].message.id);
+  });
+
+  it('emits generic reactive signal data parts as renderable message updates', async () => {
+    const storage = new InMemoryStore();
+    const harness = createHarness(storage);
+    const events: HarnessEvent[] = [];
+    harness.subscribe(event => {
+      events.push(event);
+    });
+    const state = (harness as any).createStreamState();
+
+    await (harness as any).processStreamChunk(
+      state,
+      {
+        type: 'data-signal',
+        data: {
+          id: 'reactive-signal-1',
+          type: 'reactive',
+          tagName: 'build-status',
+          contents: 'Build is still running',
+          createdAt: '2026-05-04T00:00:00.000Z',
+          attributes: { source: 'ci' },
+          metadata: { buildId: 'build-1' },
+        },
+      },
+      new RequestContext(),
+    );
+
+    expect(events).toContainEqual({
+      type: 'message_update',
+      message: expect.objectContaining({
+        role: 'assistant',
+        content: [
+          {
+            type: 'reactive_signal',
+            id: 'reactive-signal-1',
+            tagName: 'build-status',
+            message: 'Build is still running',
+            attributes: { source: 'ci' },
+            metadata: { buildId: 'build-1' },
+          },
+        ],
+      }),
+    });
+  });
+
+  it('emits notification summary data parts as renderable message updates', async () => {
+    const storage = new InMemoryStore();
+    const harness = createHarness(storage);
+    const events: HarnessEvent[] = [];
+    harness.subscribe(event => {
+      events.push(event);
+    });
+    const state = (harness as any).createStreamState();
+
+    await (harness as any).processStreamChunk(
+      state,
+      {
+        type: 'data-signal',
+        data: {
+          id: 'summary-1',
+          type: 'notification',
+          tagName: 'notification-summary',
+          contents: 'mastracode: 1',
+          createdAt: '2026-05-04T00:00:00.000Z',
+          metadata: {
+            notificationSummary: {
+              threadId: 'thread-1',
+              resourceId: 'resource-1',
+              pending: 1,
+              bySource: { mastracode: 1 },
+              byPriority: { low: 1 },
+              notificationIds: ['notification-1'],
+            },
+            notificationIds: ['notification-1'],
+          },
+        },
+      },
+      new RequestContext(),
+    );
+
+    expect(events).toContainEqual({
+      type: 'message_update',
+      message: expect.objectContaining({
+        role: 'assistant',
+        content: [
+          {
+            type: 'notification_summary',
+            id: 'summary-1',
+            message: 'mastracode: 1',
+            pending: 1,
+            bySource: { mastracode: 1 },
+            byPriority: { low: 1 },
+            notificationIds: ['notification-1'],
+          },
+        ],
+      }),
+    });
+  });
+
+  it('emits full notification data parts as renderable message updates', async () => {
+    const storage = new InMemoryStore();
+    const harness = createHarness(storage);
+    const events: HarnessEvent[] = [];
+    harness.subscribe(event => {
+      events.push(event);
+    });
+    const state = (harness as any).createStreamState();
+
+    await (harness as any).processStreamChunk(
+      state,
+      {
+        type: 'data-signal',
+        data: {
+          id: 'notification-signal-1',
+          type: 'notification',
+          tagName: 'notification',
+          contents: 'CI failed on main',
+          createdAt: '2026-05-04T00:00:00.000Z',
+          attributes: {
+            id: 'notification-1',
+            source: 'github',
+            kind: 'ci-status',
+            priority: 'high',
+            status: 'delivered',
+          },
+          metadata: {
+            notification: {
+              signal: 'notification',
+              recordId: 'notification-1',
+              source: 'github',
+              kind: 'ci-status',
+              priority: 'high',
+              status: 'delivered',
+            },
+          },
+        },
+      },
+      new RequestContext(),
+    );
+
+    expect(events).toContainEqual({
+      type: 'message_update',
+      message: expect.objectContaining({
+        role: 'assistant',
+        content: [
+          {
+            type: 'notification',
+            id: 'notification-signal-1',
+            notificationId: 'notification-1',
+            message: 'CI failed on main',
+            source: 'github',
+            kind: 'ci-status',
+            priority: 'high',
+            status: 'delivered',
+            attributes: {
+              id: 'notification-1',
+              source: 'github',
+              kind: 'ci-status',
+              priority: 'high',
+              status: 'delivered',
+            },
+            metadata: {
+              notification: {
+                signal: 'notification',
+                recordId: 'notification-1',
+                source: 'github',
+                kind: 'ci-status',
+                priority: 'high',
+                status: 'delivered',
+              },
+            },
+          },
+        ],
+      }),
+    });
+  });
+
+  it('emits state signal data parts as renderable message updates', async () => {
+    const storage = new InMemoryStore();
+    const harness = createHarness(storage);
+    const events: HarnessEvent[] = [];
+    harness.subscribe(event => {
+      events.push(event);
+    });
+    const state = (harness as any).createStreamState();
+
+    await (harness as any).processStreamChunk(
+      state,
+      {
+        type: 'data-signal',
+        data: {
+          id: 'state-signal-1',
+          type: 'state',
+          tagName: 'state',
+          contents: 'changed: active tab URL changed to https://example.com',
+          createdAt: '2026-05-04T00:00:00.000Z',
+          metadata: {
+            state: {
+              id: 'browser',
+              mode: 'delta',
+              cacheKey: 'browser:https://example.com',
+              version: 2,
+            },
+          },
+        },
+      },
+      new RequestContext(),
+    );
+
+    expect(events).toContainEqual({
+      type: 'message_update',
+      message: expect.objectContaining({
+        role: 'assistant',
+        content: [
+          {
+            type: 'state_signal',
+            id: 'state-signal-1',
+            stateId: 'browser',
+            mode: 'delta',
+            cacheKey: 'browser:https://example.com',
+            version: 2,
+            message: 'changed: active tab URL changed to https://example.com',
+          },
+        ],
+      }),
+    });
   });
 });

@@ -100,6 +100,8 @@ export default defineConfig({
         '@internal/external-types',
         '@internal/core',
         '@internal/voice',
+        'hono',
+        'hono-openapi',
       ]),
     );
 
